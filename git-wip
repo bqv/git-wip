@@ -15,7 +15,7 @@
 # Please see http://www.gnu.org/licenses/gpl-2.0.txt
 #
 
-USAGE='[ info | save <message> [ --editor | --untracked | --no-gpg-sign ] | log [ --pretty ] | commit <message> | delete ] [ [--] <file>... ]'
+USAGE='[ info | save <message> [ --editor | --untracked | --no-gpg-sign ] | log [ --pretty ] | commit <message> | squash | delete ] [ [--] <file>... ]'
 LONG_USAGE="Manage Work In Progress branches
 
 Commands:
@@ -221,6 +221,8 @@ do_save () {
 
 	dbg "... has changes"
 
+    export GIT_COMMITTER_NAME="git-wip"
+    export GIT_COMMITTER_EMAIL="wip@git"
 	new_wip=$(printf '%s\n' "$msg" | git commit-tree $no_sign $new_tree -p $wip_parent 2>/dev/null) \
         || die "Cannot record working tree state"
 
@@ -310,12 +312,6 @@ do_commit () {
 	while test $# != 0
 	do
 		case "$1" in
-		-a)
-            git add -a
-            ;;
-		-p)
-            git add -p
-			;;
 		-u|--untracked)
 			add_untracked=t
 			;;
@@ -341,10 +337,18 @@ do_commit () {
 		esac
 		shift
 	done
+	local -a files=( "$@" )
 	local "add_untracked=$add_untracked"
 	local "add_ignored=$add_ignored"
 
+	if test "${#files[@]}" -gt 0
+	then
+		dbg "check_files ${files[@]}"
+		check_files "${files[@]}"
+	fi
+
 	dbg "msg=$msg"
+	dbg "files=$files"
 
 	local work_branch=$(get_work_branch)
 	local wip_branch="$WIP_PREFIX$work_branch"
@@ -401,14 +405,31 @@ do_commit () {
 	fi
 
 	new_work=$(printf '%s\n' "$msg" | git commit-tree $no_sign $new_tree -p $work_last -p $wip_parent 2>/dev/null) \
-        || die "Cannot record new commit tree"
+        || die "Cannot record new branch tree"
 
 	dbg "new_work=$new_work"
 
 	msg1=$(printf '%s\n' "$msg" | sed -e 1q)
 	git update-ref -m "git-wip: $msg1" HEAD $new_work $work_last
+    git reset "${files[@]}"
+
+    [ -z "$msg" ] && git commit --amend
+
+	git replace --graft HEAD $work_last
 
 	dbg "SUCCESS"
+}
+
+do_squash () {
+	local work_branch=$1
+	[ -z $branch ] && work_branch=$(get_work_branch)
+	local wip_branch="$WIP_PREFIX$work_branch"
+
+    local base=$(git merge-base -a --octopus $(git replace -l) $work_branch)
+	dbg "base=$base"
+
+    export FILTER_BRANCH_SQUELCH_WARNING=1
+    git filter-branch -f $base~1..HEAD
 }
 
 do_delete () {
@@ -456,7 +477,7 @@ save)
 		shift
 	fi
 	;;
-info|log|commit|delete)
+info|log|commit|squash|delete)
 	WIP_COMMAND=$1
 	shift
 	;;
@@ -482,6 +503,9 @@ log)
 	;;
 commit)
 	do_commit "$@"
+	;;
+squash)
+	do_squash "$@"
 	;;
 delete)
 	do_delete "$@"
