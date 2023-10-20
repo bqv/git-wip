@@ -74,7 +74,7 @@ cleanup () {
 
 get_work_branch () {
 	ref=$(git symbolic-ref -q HEAD) \
-	|| report_soft_error "git-wip requires a branch"
+        || report_soft_error "git-wip requires a branch"
 
 
 	branch=${ref#refs/heads/}
@@ -189,7 +189,7 @@ do_save () {
 	if wip_last=$(git rev-parse --quiet --verify $wip_branch)
 	then
 		local base=$(git merge-base $wip_last $work_last) \
-		|| die "'work_branch' and '$wip_branch' are unrelated."
+            || die "'work_branch' and '$wip_branch' are unrelated."
 
 		if [ $base = $work_last ] ; then
 			wip_parent=$wip_last
@@ -211,7 +211,7 @@ do_save () {
 	dbg "wip_parent=$wip_parent"
 
 	new_tree=$( build_new_tree "$add_untracked" "$add_ignored" "${files[@]}" ) \
-	|| die "Cannot save the current worktree state."
+        || die "Cannot save the current worktree state."
 
 	dbg "new_tree=$new_tree"
 
@@ -222,7 +222,7 @@ do_save () {
 	dbg "... has changes"
 
 	new_wip=$(printf '%s\n' "$msg" | git commit-tree $no_sign $new_tree -p $wip_parent 2>/dev/null) \
-	|| die "Cannot record working tree state"
+        || die "Cannot record working tree state"
 
 	dbg "new_wip=$new_wip"
 
@@ -302,9 +302,16 @@ do_log () {
 }
 
 do_delete () {
-	local branch=$1
+	local work_branch=$1
+	[ -z $branch ] && work_branch=$(get_work_branch)
+	local wip_branch="$WIP_PREFIX$work_branch"
+    local wip_branch_file="$GIT_DIR/$wip_branch"
 
-	die "delete not implemented"
+    if test -f "$wip_branch_file"
+    then
+        dbg "removing $wip_branch_file"
+        rm -f "$wip_branch_file"
+    fi
 }
 
 do_help () {
