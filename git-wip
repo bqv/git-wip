@@ -15,7 +15,7 @@
 # Please see http://www.gnu.org/licenses/gpl-2.0.txt
 #
 
-USAGE='[ info | save <message> [ --editor | --untracked | --no-gpg-sign ] | log [ --pretty ] | delete ] [ [--] <file>... ]'
+USAGE='[ info | save <message> [ --editor | --untracked | --no-gpg-sign ] | log [ --pretty ] | commit <message> | delete ] [ [--] <file>... ]'
 LONG_USAGE="Manage Work In Progress branches
 
 Commands:
@@ -301,6 +301,116 @@ do_log () {
 	echo git log $graph $stat $pretty "$@" $wip_last $work_last "^$stop" | sh
 }
 
+do_commit () {
+	local msg=""
+	local no_sign=
+	local add_untracked=
+	local add_ignored=
+
+	while test $# != 0
+	do
+		case "$1" in
+		-a)
+            git add -a
+            ;;
+		-p)
+            git add -p
+			;;
+		-u|--untracked)
+			add_untracked=t
+			;;
+		-i|--ignored)
+			add_ignored=t
+			;;
+		--no-gpg-sign)
+			no_sign=--no-gpg-sign
+			;;
+		-m)
+			shift
+			msg=$1
+			;;
+		--)
+			shift
+            msg=$@
+			break
+			;;
+		*)
+			[ -f "$1" ] && break
+			die "Unknown option '$1'."
+			;;
+		esac
+		shift
+	done
+	local "add_untracked=$add_untracked"
+	local "add_ignored=$add_ignored"
+
+	dbg "msg=$msg"
+
+	local work_branch=$(get_work_branch)
+	local wip_branch="$WIP_PREFIX$work_branch"
+
+	dbg "work_branch=$work_branch"
+	dbg "wip_branch=$wip_branch"
+
+	# enable reflog
+	local wip_branch_reflog="$GIT_DIR/logs/$wip_branch"
+	dbg "wip_branch_reflog=$wip_branch_reflog"
+	mkdir -p "$(dirname "$wip_branch_reflog")"
+	: >>"$wip_branch_reflog"
+
+	if ! work_last=$(git rev-parse --verify $work_branch)
+	then
+		report_soft_error "'$work_branch' branch has no commits."
+	fi
+
+	dbg "work_last=$work_last"
+
+	if wip_last=$(git rev-parse --quiet --verify $wip_branch)
+	then
+		local base=$(git merge-base $wip_last $work_last) \
+            || die "'work_branch' and '$wip_branch' are unrelated."
+
+		if [ $base = $work_last ] ; then
+			wip_parent=$wip_last
+		else
+			wip_parent=$work_last
+		fi
+	else
+		# remove empty/corrupt wip branch file
+		local wip_branch_file="$GIT_DIR/$wip_branch"
+		if test -e "$wip_branch_file"
+		then
+			dbg "removing $wip_branch_file"
+			rm -f "$wip_branch_file"
+		fi
+		# use the working branch for parent
+		wip_parent=$work_last
+	fi
+
+	dbg "wip_parent=$wip_parent"
+
+	new_tree=$( build_new_tree "$add_untracked" "$add_ignored" "${files[@]}" ) \
+        || die "Cannot save the current worktree state."
+
+	dbg "new_tree=$new_tree"
+
+	if git diff-tree --exit-code --quiet $new_tree $wip_parent ; then
+		dbg "no changes"
+    else
+        dbg "... has changes"
+	fi
+
+	new_work=$(printf '%s\n' "$msg" | git commit-tree $no_sign $new_tree -p $work_last -p $wip_parent 2>/dev/null) \
+        || die "Cannot record new commit tree"
+
+	dbg "new_work=$new_work"
+
+	msg1=$(printf '%s\n' "$msg" | sed -e 1q)
+	git update-ref -m "git-wip: $msg1" HEAD $new_work $work_last
+
+	dbg "SUCCESS"
+}
+
 do_delete () {
 	local work_branch=$1
 	[ -z $branch ] && work_branch=$(get_work_branch)
@@ -346,7 +456,7 @@ save)
 		shift
 	fi
 	;;
-info|log|delete)
+info|log|commit|delete)
 	WIP_COMMAND=$1
 	shift
 	;;
@@ -369,6 +479,9 @@ info)
 	;;
 log)
 	do_log "$@"
+	;;
+commit)
+	do_commit "$@"
 	;;
 delete)
 	do_delete "$@"
